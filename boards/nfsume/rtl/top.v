@@ -246,7 +246,7 @@ network_path network_path_inst_1 (
 assign led[7:0] = {4'b000, 1'b0, 1'b0, xphy1_status[0], xphy0_status[0]};
 
 //- Disable Laser when unconnected on SFP+
-assign sfp_tx_disable = 4'b0000;
+assign sfp_tx_disable = 2'b00;
 
 // ----------------------
 // -- User Application --
@@ -340,32 +340,17 @@ sram_fifo u_sram_fifo(
 
 wire prog_full, prog_empty;
 assign sram_rd_en = dc_state == DC_START && ~prog_full;
-assign asfifo_wr_en = toggle == 0 && xphy_gt0_tx_resetdone == 1 &&
-                      dc_state == DC_START;
-
-ila_0 u_ila (
-	.clk(sram_clk),
-	.probe0({
-		dc_state,
-		asfifo_dout,
-		sram_odata,
-		sram_ovalid,
-		sram_rd_en,
-		asfifo_wr_en,
-		prog_full,
-		prog_empty
-	})
-);
+assign asfifo_wr_en = toggle == 0 && xphy_gt0_tx_resetdone == 1; 
 
 /*
  *  Delay Controller
  */
 
-localparam NS_FREQ = 10; //ns
+localparam NS_FREQ = 5; //ns
 localparam MAX_TIMER_CYCLES = MAX_TIMER / NS_FREQ;
 
 always @ (posedge sram_clk) 
-	if (sys_rst) begin
+	if (sys_rst | ~xphy_gt0_tx_resetdone) begin
 		dc_state <= 0;
 		waitcnt  <= 0;
 	end else begin
@@ -373,34 +358,35 @@ always @ (posedge sram_clk)
 			DC_STOP: begin
 				if (waitcnt == MAX_TIMER_CYCLES) begin
 					waitcnt <= 0;
+					dc_state <= DC_START;
 				end else
 					waitcnt <= waitcnt + 1;
 			end
 			DC_START: ;
 		endcase
 	end
-
-/*
- * Rate Contoller
- */
-
-reg rd_en_reg, wr_en_reg;
-
-always @ (posedge sram_clk) 
-	if (sys_rst) begin
-		rd_en_reg <= 0;
-		wr_en_reg <= 0;
-	end else begin
-		if (prog_full)
-			rd_en_reg <= 0;
-		else
-			rd_en_reg <= 1;
-
-		if (prog_empty)
-			wr_en_reg <= 0;
-		else
-			wr_en_reg <= 1;
-	end
+//
+///*
+// * Rate Contoller
+// */
+//
+//reg rd_en_reg, wr_en_reg;
+//
+//always @ (posedge sram_clk) 
+//	if (sys_rst) begin
+//		rd_en_reg <= 0;
+//		wr_en_reg <= 0;
+//	end else begin
+//		if (prog_full)
+//			rd_en_reg <= 0;
+//		else
+//			rd_en_reg <= 1;
+//
+//		if (prog_empty)
+//			wr_en_reg <= 0;
+//		else
+//			wr_en_reg <= 1;
+//	end
 
 wire [143:0] tx_dout;
 wire tx_rd_en;
@@ -416,15 +402,15 @@ asfifo_144_1024 u_txfifo (
   .dout   (tx_dout),    
   .full   (tx_full),    
   .empty  (tx_empty),    
-  .prog_full(prog_full),    // output wire prog_full
-  .prog_empty(prog_empty)  // output wire prog_empty
+  .prog_full(prog_full), 
+  .prog_empty(prog_empty) 
 );
 
 reg        rx_state;
 reg [71:0] rx_tmp;
 assign tx_rd_en = ~tx_empty && rx_state == 0 && dc_state == DC_START;
 
-always @ (posedge sram_clk) begin
+always @ (posedge xgemac_clk_156) begin
 	if (sys_rst) begin
 		rx_state <= 0;
 		rx_tmp   <= 0;
@@ -446,10 +432,37 @@ end
 
 assign xgmii_txd_0 = xgmii_rxd_1;
 assign xgmii_txc_0 = xgmii_rxc_1;
-assign xgmii_txd_1 = (dc_state == DC_STOP) ? 64'd0 :
-                     (rx_state == 0) ? tx_dout[71:8]  : tx_tmp[71:8];
-assign xgmii_txc_1 = (dc_state == DC_STOP) ? 8'd0 : 
-                     (rx_state == 0) ? tx_dout[7:0]   : tx_tmp[7:0];
+assign xgmii_txd_1 = (dc_state == DC_STOP) ? 64'd0         :
+                     (rx_state == 0)       ? tx_dout[71:8] : rx_tmp[71:8];
+assign xgmii_txc_1 = (dc_state == DC_STOP) ? 8'd0          : 
+                     (rx_state == 0)       ? tx_dout[7:0]  : rx_tmp[7:0];
 
+ila_0 u_ila (
+	.clk( sram_clk ),
+	.probe0({
+		dc_state,   // 1
+		asfifo_dout[71:0],// 144
+		sram_odata[71:0], // 144
+		sram_ovalid,// 1
+		sram_rd_en, // 1
+		asfifo_wr_en,// 1
+		prog_full, // 1
+		prog_empty, // 1
+		tx_full,
+		tx_empty
+	})
+);
+
+
+
+ila_0 u_ila1 (
+	.clk( xgemac_clk_156 ),
+	.probe0({
+		xgmii_rxd_0,
+		xgmii_rxd_1,
+		xgmii_txd_0, 
+		xgmii_txd_1
+	})
+);
 endmodule
 `default_nettype wire
